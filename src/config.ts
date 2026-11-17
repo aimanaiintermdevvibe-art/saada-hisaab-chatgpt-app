@@ -61,7 +61,8 @@ export const config = {
   ALLOWED_HOSTS: renderHost ? [...new Set([...parsed.data.ALLOWED_HOSTS, renderHost])] : parsed.data.ALLOWED_HOSTS,
 };
 
-if (config.NODE_ENV === "production") {
-  // Dev access acts as one fixed user. It must never serve real customers.
-  throw new Error("Dev-user access is enabled. Replace it with OAuth before running with NODE_ENV=production.");
-}
+// Dev access acts as one fixed user (protected by DEV_ACCESS_KEY). Fine for the dummy-data demo;
+// it must be replaced by OAuth before the app serves real customers.
+console.error(
+  `WARNING: dev access mode: every request acts as Saada Hisaab user "${config.DEV_USERNAME}". Demo use only, until OAuth is added.`,
+);

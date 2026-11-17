@@ -27,8 +27,14 @@ app.get("/health", (_req, res) => {
 app.use(hostHeaderValidation(config.ALLOWED_HOSTS));
 app.use(express.json({ limit: "1mb" }));
 
-app.post("/mcp/:key", async (req: Request, res: Response) => {
-  if (!keyMatches(req.params.key)) return jsonRpcError(res, 404, "Not found");
+/** The access key from /mcp/<key>. A wildcard, because generated keys (e.g. Render's base64) may contain "/". */
+function accessKeyOf(req: Request): string {
+  const raw: unknown = req.params.key;
+  return Array.isArray(raw) ? raw.join("/") : String(raw ?? "");
+}
+
+app.post("/mcp/*key", async (req: Request, res: Response) => {
+  if (!keyMatches(accessKeyOf(req))) return jsonRpcError(res, 404, "Not found");
 
   let caller;
   try {
@@ -56,7 +62,7 @@ app.post("/mcp/:key", async (req: Request, res: Response) => {
 });
 
 // Stateless server: no SSE stream or session to resume/delete.
-app.all("/mcp/:key", (_req, res) => jsonRpcError(res, 405, "Method not allowed"));
+app.all("/mcp/*key", (_req, res) => jsonRpcError(res, 405, "Method not allowed"));
 app.use((_req, res) => jsonRpcError(res, 404, "Not found"));
 
 async function main(): Promise<void> {
