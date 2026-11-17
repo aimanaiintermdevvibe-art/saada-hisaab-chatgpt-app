@@ -1,0 +1,35 @@
+# Render Blueprint: New > Blueprint > pick this repository.
+# Values marked `sync: false` are secrets; Render asks for them when the Blueprint is created.
+services:
+  - type: web
+    name: saada-hisaab-mcp
+    runtime: node
+    plan: free
+    region: singapore
+    buildCommand: npm ci && npm run build
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      # Database (Supabase session pooler)
+      - key: PG_HOST
+        sync: false
+      - key: PG_PORT
+        value: "5432"
+      - key: DB_NAME
+        value: postgres
+      - key: DB_READONLY_USER
+        sync: false
+      - key: DB_READONLY_PASSWORD
+        sync: false
+      - key: PG_SSL
+        value: require
+      # App
+      - key: BUSINESS_TIMEZONE
+        value: Asia/Karachi
+      - key: CURRENCY
+        value: PKR
+      # Dev-only access until OAuth: the server acts as this user; the URL needs the key.
+      - key: DEV_USERNAME
+        value: admin
+      - key: DEV_ACCESS_KEY
+        generateValue: true

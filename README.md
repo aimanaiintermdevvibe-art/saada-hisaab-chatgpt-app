@@ -56,6 +56,24 @@ Random values for `DB_READONLY_PASSWORD` / `DEV_ACCESS_KEY`:
 
   The access key in the URL is the only protection until OAuth exists. Keep the URL private and stop ngrok when done.
 
+## Deploy (demo): Supabase + Render
+
+Same code everywhere; only settings differ (`.env` locally, `.env.supabase` for the cloud database,
+environment variables on Render).
+
+1. **Database (Supabase):** create a project (region Singapore), copy the *Session pooler* details into
+   `.env.supabase` (git-ignored), then restore:
+   `.\db\setup-db.ps1 -EnvFile .env.supabase -BackupPath C:\path\to\sh_db.backup`.
+   The script restores into the empty `postgres` database, creates the read-only login and removes the
+   Supabase Data API's access (`anon`, `authenticated`) to the restored tables.
+2. **Server (Render):** New > Blueprint > this repository. `render.yaml` defines the service; enter `PG_HOST`,
+   `DB_READONLY_USER` and `DB_READONLY_PASSWORD` from `.env.supabase` when asked. Render generates
+   `DEV_ACCESS_KEY` (see the service's Environment tab).
+3. MCP endpoint: `https://<service>.onrender.com/mcp/<DEV_ACCESS_KEY>`. The free plan sleeps after 15 idle
+   minutes; the first request then takes up to a minute.
+
+Run the app locally against Supabase (PowerShell): `$env:ENV_FILE=".env.supabase"; npm run dev`.
+
 ## Tools
 
 | Tool | Answers |

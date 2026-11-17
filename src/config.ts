@@ -2,8 +2,9 @@ import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 
-// Load <project root>/.env (works from both src/ and dist/). Real environment variables win.
-const envFile = fileURLToPath(new URL("../.env", import.meta.url));
+// Load <project root>/.env, or the file named by ENV_FILE (e.g. .env.supabase). Works from src/ and dist/.
+// Real environment variables always win, so a host like Render needs no file at all.
+const envFile = fileURLToPath(new URL(`../${process.env.ENV_FILE ?? ".env"}`, import.meta.url));
 if (existsSync(envFile)) process.loadEnvFile(envFile);
 
 function isValidTimeZone(tz: string): boolean {
@@ -24,12 +25,19 @@ const schema = z.object({
   DB_NAME: z.string().min(1),
   DB_READONLY_USER: z.string().min(1),
   DB_READONLY_PASSWORD: z.string().min(1),
+  // disable: local PostgreSQL. require: encrypted (Supabase). verify: encrypted + server certificate checked against PG_SSL_CA_FILE.
+  PG_SSL: z.enum(["disable", "require", "verify"]).default("disable"),
+  PG_SSL_CA_FILE: z.string().optional(),
 
+  // Render must listen on all interfaces; locally only on this machine.
+  HOST: z.string().default(process.env.RENDER ? "0.0.0.0" : "127.0.0.1"),
   PORT: z.coerce.number().int().positive().default(3000),
   ALLOWED_HOSTS: z
     .string()
     .default("localhost,127.0.0.1")
     .transform((s) => s.split(",").map((h) => h.trim()).filter(Boolean)),
+  // Set by Render to the service's public host name; it is added to ALLOWED_HOSTS automatically.
+  RENDER_EXTERNAL_HOSTNAME: z.string().optional(),
   BUSINESS_TIMEZONE: z.string().default("Asia/Karachi").refine(isValidTimeZone, "must be a valid IANA time zone"),
   CURRENCY: z.string().regex(/^[A-Z]{3}$/, "must be a 3-letter ISO code").default("PKR"),
 
@@ -43,7 +51,15 @@ if (!parsed.success) {
   throw new Error(`Invalid configuration in .env:\n${problems}`);
 }
 
-export const config = parsed.data;
+if (parsed.data.PG_SSL === "verify" && !parsed.data.PG_SSL_CA_FILE) {
+  throw new Error("Invalid configuration: PG_SSL=verify needs PG_SSL_CA_FILE (the database's CA certificate).");
+}
+
+const renderHost = parsed.data.RENDER_EXTERNAL_HOSTNAME;
+export const config = {
+  ...parsed.data,
+  ALLOWED_HOSTS: renderHost ? [...new Set([...parsed.data.ALLOWED_HOSTS, renderHost])] : parsed.data.ALLOWED_HOSTS,
+};
 
 if (config.NODE_ENV === "production") {
   // Dev access acts as one fixed user. It must never serve real customers.

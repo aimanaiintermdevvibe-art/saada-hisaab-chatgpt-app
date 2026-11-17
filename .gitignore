@@ -10,3 +10,7 @@ coverage/
 # local MCP client config (contains the dev access key)
 .mcp.json
 .vscode/mcp.json
+
+# per-environment settings (e.g. .env.supabase) hold passwords
+.env.*
+!.env.example

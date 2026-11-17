@@ -1,5 +1,19 @@
+import { readFileSync } from "node:fs";
 import pg from "pg";
 import { config } from "../config.js";
+
+/** TLS to the database, from PG_SSL. */
+function sslOption(): pg.PoolConfig["ssl"] {
+  switch (config.PG_SSL) {
+    case "disable":
+      return false;
+    case "require":
+      // Encrypted, but the server certificate is not verified. Fine for the demo; use "verify" in production.
+      return { rejectUnauthorized: false };
+    case "verify":
+      return { ca: readFileSync(config.PG_SSL_CA_FILE!, "utf8"), rejectUnauthorized: true };
+  }
+}
 
 const OID = { INT8: 20, NUMERIC: 1700, DATE: 1082, TIMESTAMP: 1114 } as const;
 
@@ -27,6 +41,7 @@ export const pool = new pg.Pool({
   database: config.DB_NAME,
   user: config.DB_READONLY_USER,
   password: config.DB_READONLY_PASSWORD,
+  ssl: sslOption(),
   application_name: "saada-hisaab-mcp",
   max: 10,
   idleTimeoutMillis: 30_000,
