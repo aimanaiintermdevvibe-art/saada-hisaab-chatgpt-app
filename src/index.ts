@@ -1,73 +1,23 @@
-import { createHash, timingSafeEqual } from "node:crypto";
-import { hostHeaderValidation } from "@modelcontextprotocol/sdk/server/middleware/hostHeaderValidation.js";
-import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import express, { type Request, type Response } from "express";
-import { AuthError, resolveCallerByUsername } from "./auth/caller.js";
+import { createApp } from "./app.js";
+import { resolveCallerByUsername } from "./auth/caller.js";
 import { config } from "./config.js";
 import { pool } from "./db/pool.js";
-import { buildServer } from "./server.js";
-
-// ---------- Dev access key (until OAuth): MCP endpoint is /mcp/<DEV_ACCESS_KEY> ----------
-const digest = (s: string) => createHash("sha256").update(s).digest();
-const expectedKey = digest(config.DEV_ACCESS_KEY);
-const keyMatches = (key: unknown) => typeof key === "string" && timingSafeEqual(digest(key), expectedKey);
-
-function jsonRpcError(res: Response, status: number, message: string): void {
-  res.status(status).json({ jsonrpc: "2.0", error: { code: -32000, message }, id: null });
-}
-
-const app = express();
-
-// Before Host checking: hosting platforms probe the health check with their own internal Host header.
-app.get("/health", (_req, res) => {
-  res.json({ ok: true });
-});
-
-// DNS-rebinding protection: only accept requests addressed to our own host names.
-app.use(hostHeaderValidation(config.ALLOWED_HOSTS));
-app.use(express.json({ limit: "1mb" }));
-
-/** The access key from /mcp/<key>. A wildcard, because generated keys (e.g. Render's base64) may contain "/". */
-function accessKeyOf(req: Request): string {
-  const raw: unknown = req.params.key;
-  return Array.isArray(raw) ? raw.join("/") : String(raw ?? "");
-}
-
-app.post("/mcp/*key", async (req: Request, res: Response) => {
-  if (!keyMatches(accessKeyOf(req))) return jsonRpcError(res, 404, "Not found");
-
-  let caller;
-  try {
-    caller = await resolveCallerByUsername(config.DEV_USERNAME);
-  } catch (err) {
-    if (err instanceof AuthError) return jsonRpcError(res, 403, err.message);
-    console.error(JSON.stringify({ level: "error", msg: "caller lookup failed", error: (err as Error).message }));
-    return jsonRpcError(res, 503, "Saada Hisaab is temporarily unavailable.");
-  }
-
-  // Stateless: a fresh server + transport per request, bound to this caller's tenant.
-  const server = buildServer(caller);
-  const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
-  res.on("close", () => {
-    void transport.close();
-    void server.close();
-  });
-  try {
-    await server.connect(transport);
-    await transport.handleRequest(req, res, req.body);
-  } catch (err) {
-    console.error(JSON.stringify({ level: "error", msg: "MCP request failed", error: (err as Error).message }));
-    if (!res.headersSent) res.status(500).json({ jsonrpc: "2.0", error: { code: -32603, message: "Internal server error" }, id: null });
-  }
-});
-
-// Stateless server: no SSE stream or session to resume/delete.
-app.all("/mcp/*key", (_req, res) => jsonRpcError(res, 405, "Method not allowed"));
-app.use((_req, res) => jsonRpcError(res, 404, "Not found"));
 
 async function main(): Promise<void> {
-  // Fail fast if the database or the dev user is not usable.
-  const caller = await resolveCallerByUsername(config.DEV_USERNAME);
+  // Fail fast if the database is not reachable.
+  await pool.query("SELECT 1");
+
+  if (config.LOGIN_MODE === "dev") {
+    console.error("WARNING: LOGIN_MODE=dev: any Saada Hisaab username + DEV_LOGIN_PASSWORD signs in. Dummy data only.");
+  }
+  let devShortcut = "off";
+  if (config.DEV_ACCESS_KEY && config.DEV_USERNAME) {
+    const devUser = await resolveCallerByUsername(config.DEV_USERNAME);
+    devShortcut = `on: /mcp/<DEV_ACCESS_KEY> (${config.DEV_ACCESS_KEY.slice(0, 4)}…) acts as "${devUser.username}" of "${devUser.businessName}"`;
+    console.error("WARNING: dev shortcut enabled (no sign-in). Remove DEV_ACCESS_KEY to turn it off.");
+  }
+
+  const app = createApp();
   // Express 5 calls this callback with an error too (e.g. port already in use).
   const httpServer = app.listen(config.PORT, config.HOST, (error?: Error) => {
     if (error) {
@@ -79,12 +29,11 @@ async function main(): Promise<void> {
       );
       process.exit(1);
     }
-    const masked = `${config.DEV_ACCESS_KEY.slice(0, 4)}…`;
-    const base = config.RENDER_EXTERNAL_HOSTNAME ? `https://${config.RENDER_EXTERNAL_HOSTNAME}` : `http://localhost:${config.PORT}`;
     console.error(`Saada Hisaab MCP server listening on ${config.HOST}:${config.PORT}`);
-    console.error(`  MCP endpoint: ${base}/mcp/<DEV_ACCESS_KEY> (${masked})`);
+    console.error(`  MCP endpoint (OAuth): ${config.PUBLIC_BASE_URL}/mcp`);
+    console.error(`  Sign-in: ${config.LOGIN_MODE === "api" ? "Saada Hisaab login API" : "dev password"}`);
+    console.error(`  Dev shortcut: ${devShortcut}`);
     console.error(`  Database: ${config.PG_HOST}/${config.DB_NAME} (ssl: ${config.PG_SSL})`);
-    console.error(`  Acting as dev user "${caller.username}" of "${caller.businessName}" (tenant ${caller.tenantId.slice(0, 8)})`);
     console.error(`  Allowed hosts: ${config.ALLOWED_HOSTS.join(", ")}`);
   });
 

@@ -28,7 +28,14 @@ services:
         value: Asia/Karachi
       - key: CURRENCY
         value: PKR
-      # Dev-only access until OAuth: the server acts as this user; the URL needs the key.
+      # OAuth sign-in (the public URL / issuer comes from Render's RENDER_EXTERNAL_URL)
+      - key: OAUTH_SECRET
+        generateValue: true
+      - key: LOGIN_MODE
+        value: dev
+      - key: DEV_LOGIN_PASSWORD
+        sync: false
+      # Optional dev shortcut without sign-in (/mcp/<DEV_ACCESS_KEY>). Delete both to turn it off.
       - key: DEV_USERNAME
         value: admin
       - key: DEV_ACCESS_KEY

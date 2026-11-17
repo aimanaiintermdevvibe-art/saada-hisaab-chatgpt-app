@@ -14,8 +14,8 @@ ChatGPT ──HTTPS / MCP──▶ this server (Node + TypeScript) ──read-on
 
 ## Tenant isolation (how one business can never see another's data)
 
-1. **Who is calling** is decided by the server, never by ChatGPT. Today that is the dev user in `.env`;
-   in the OAuth phase it will be the user from the access token.
+1. **Who is calling** comes from the OAuth access token the user got by signing in, never from ChatGPT's
+   tool arguments. The token names the Saada Hisaab user; the server looks up that user's tenant.
 2. Every tool query goes through `withTenant()` ([src/db/tenant.ts](src/db/tenant.ts)): `$1` is always bound to
    the caller's tenant id, and any SQL that does not use `$1` is rejected before it runs.
 3. Queries run in a **read-only transaction** as `sh_mcp_readonly`, a login that can only `SELECT`, cannot see
@@ -27,34 +27,52 @@ ChatGPT ──HTTPS / MCP──▶ this server (Node + TypeScript) ──read-on
 Requires PostgreSQL 17 and Node 22+.
 
 ```powershell
-copy .env.example .env          # then fill in PG_ADMIN_PASSWORD, DB_READONLY_PASSWORD, DEV_USERNAME, DEV_ACCESS_KEY
+copy .env.example .env          # then fill in the passwords, OAUTH_SECRET and DEV_LOGIN_PASSWORD
 npm install
 npm run db:setup -- -BackupPath C:\path\to\sh_db.backup   # creates the DB, restores it, creates the read-only login
-npm test                         # 40 tests against the restored database
-npm run dev                      # http://localhost:3000, MCP endpoint /mcp/<DEV_ACCESS_KEY>
+npm test                         # 60 tests against the restored database (incl. the full OAuth flow)
+npm run dev                      # http://localhost:3000, MCP endpoint /mcp (sign-in required)
 ```
 
 `db:setup` never overwrites an existing database. To re-apply only the read-only login's permissions:
 `npm run db:setup -- -RolesOnly`.
 
-Random values for `DB_READONLY_PASSWORD` / `DEV_ACCESS_KEY`:
+Random values for `DB_READONLY_PASSWORD`, `OAUTH_SECRET`, `DEV_ACCESS_KEY`:
 `node -e "console.log(require('crypto').randomBytes(24).toString('base64url'))"`
+
+## Sign-in (OAuth 2.1)
+
+ChatGPT never sees the user's password or the Saada Hisaab login API. The server is its own OAuth
+authorization server ([src/auth/oauth-provider.ts](src/auth/oauth-provider.ts)):
+
+1. ChatGPT reads `/.well-known/oauth-protected-resource` and `/.well-known/oauth-authorization-server`,
+   then registers itself (`/register`, dynamic client registration).
+2. The user clicks Connect and lands on our `/authorize` page: **Sign in to Saada Hisaab**.
+3. `/login` checks the username and password (dev: `DEV_LOGIN_PASSWORD`; api: Saada Hisaab login API),
+   then sends the browser back to ChatGPT with a one-time code.
+4. ChatGPT exchanges the code (PKCE S256) at `/token` for a 1-hour access token and a 30-day refresh token.
+5. Every `/mcp` request needs the access token; the server resolves the user and their tenant from it.
+
+Everything is a signed token (`OAUTH_SECRET`), so registrations and sign-ins survive restarts and Render's sleep.
+Redirect targets are limited to `OAUTH_REDIRECT_HOSTS` (default: chatgpt.com, claude.ai, localhost).
+
+**Sign-in modes** (`LOGIN_MODE`):
+- `dev` (now): any Saada Hisaab username (e.g. `admin`, `abc123`) with the shared `DEV_LOGIN_PASSWORD`. Dummy data only.
+- `api`: set `SAADA_LOGIN_API_URL`. The request/response mapping in [src/auth/login.ts](src/auth/login.ts) is
+  assumed (POST `{username, password}`, 2xx = valid) until DevVibe shares the API spec.
 
 ## Try it
 
-- **MCP Inspector:** `npm run inspect`, choose *Streamable HTTP*, URL `http://localhost:3000/mcp/<DEV_ACCESS_KEY>`.
+- **MCP Inspector:** `npm run inspect`, choose *Streamable HTTP*, URL `http://localhost:3000/mcp`, and use its
+  OAuth settings to sign in (or use the dev shortcut URL below without sign-in).
 - **With an AI chat, no ChatGPT plan needed (Claude Code):** run `npm run dev`, then start a new Claude Code
   conversation in this folder and approve the `saada-hisaab` server from `.mcp.json`. Ask questions in plain English.
-  `.mcp.json` holds the access key and is git-ignored. To recreate it, use this content with your key:
+  This uses the **dev shortcut** `/mcp/<DEV_ACCESS_KEY>` (no sign-in; acts as `DEV_USERNAME`). `.mcp.json` holds
+  the key and is git-ignored. To recreate it:
   `{"mcpServers":{"saada-hisaab":{"type":"http","url":"http://localhost:3000/mcp/<DEV_ACCESS_KEY>"}}}`
-- **Inside ChatGPT (developer mode; needs ChatGPT Plus/Pro for read-only apps, or Business/Enterprise):**
-  1. `npm run dev`, then in another terminal `ngrok http 3000`.
-  2. Add the ngrok host (e.g. `abc123.ngrok-free.app`) to `ALLOWED_HOSTS` in `.env` and restart `npm run dev`.
-  3. In ChatGPT settings, turn on **Developer mode**, create a new app/connector with URL
-     `https://<ngrok-host>/mcp/<DEV_ACCESS_KEY>` and no authentication.
-  4. In a new chat, enable the app and ask e.g. "What were my sales by month in 2026?".
-
-  The access key in the URL is the only protection until OAuth exists. Keep the URL private and stop ngrok when done.
+- **Inside ChatGPT (developer mode):** use the deployed server (below). In ChatGPT settings, turn on
+  **Developer mode**, create an app with URL `https://<service>.onrender.com/mcp` and authentication **OAuth**.
+  ChatGPT registers itself; click Connect and sign in with a Saada Hisaab username and the demo password.
 
 ## Deploy (demo): Supabase + Render
 
@@ -67,9 +85,9 @@ environment variables on Render).
    The script restores into the empty `postgres` database, creates the read-only login and removes the
    Supabase Data API's access (`anon`, `authenticated`) to the restored tables.
 2. **Server (Render):** New > Blueprint > this repository. `render.yaml` defines the service; enter `PG_HOST`,
-   `DB_READONLY_USER` and `DB_READONLY_PASSWORD` from `.env.supabase` when asked. Render generates
-   `DEV_ACCESS_KEY` (see the service's Environment tab).
-3. MCP endpoint: `https://<service>.onrender.com/mcp/<DEV_ACCESS_KEY>`. The free plan sleeps after 15 idle
+   `DB_READONLY_USER`, `DB_READONLY_PASSWORD` and `DEV_LOGIN_PASSWORD` from `.env.supabase` when asked.
+   Render generates `OAUTH_SECRET` and `DEV_ACCESS_KEY`; the public URL (OAuth issuer) comes from Render.
+3. MCP endpoint: `https://<service>.onrender.com/mcp` (OAuth sign-in). The free plan sleeps after 15 idle
    minutes; the first request then takes up to a minute.
 
 Run the app locally against Supabase (PowerShell): `$env:ENV_FILE=".env.supabase"; npm run dev`.

@@ -2,6 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import type { Caller } from "../auth/caller.js";
+import { SCOPE_READ } from "../auth/scopes.js";
 import { withTenant, type TenantDb } from "../db/tenant.js";
 
 /** An error whose message is safe and useful to show the user (e.g. "invoice not found"). */
@@ -23,6 +24,9 @@ export function defineTool<S extends z.ZodRawShape>(spec: ReadToolSpec<S>): Read
 
 const READ_ONLY = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false } as const;
 
+/** Tells ChatGPT each tool needs the user to sign in (OAuth) with the read scope. */
+const SECURITY_META = { securitySchemes: [{ type: "oauth2", scopes: [SCOPE_READ] }] };
+
 /** Registers a read-only tool whose queries all run inside the caller's tenant scope. */
 export function registerReadTool(server: McpServer, caller: Caller, spec: ReadToolSpec<z.ZodRawShape>): void {
   server.registerTool(
@@ -32,6 +36,7 @@ export function registerReadTool(server: McpServer, caller: Caller, spec: ReadTo
       description: spec.description,
       inputSchema: spec.input,
       annotations: { title: spec.title, ...READ_ONLY },
+      _meta: SECURITY_META,
     },
     async (args: unknown): Promise<CallToolResult> => {
       const started = Date.now();

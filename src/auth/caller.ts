@@ -26,19 +26,25 @@ interface UserRow {
   tenantEnabled: boolean;
 }
 
+/** Looks up a user by login name (sign-in, and the dev shortcut). */
+export const resolveCallerByUsername = (username: string) => loadCaller("username", username);
+
+/** Looks up a user by id (the `sub` of an OAuth access token). */
+export const resolveCallerById = (userId: string) => loadCaller("id", userId);
+
 /**
- * Looks up a user and their tenant. This identity lookup is the only query that is not
- * tenant-scoped, because it is how the tenant is found. Dev mode uses DEV_USERNAME;
- * the OAuth phase will call this with the user from the access token.
+ * Looks up a user and their tenant, and checks the account may be used. This identity lookup is
+ * the only query that is not tenant-scoped, because it is how the tenant is found.
  */
-export async function resolveCallerByUsername(username: string): Promise<Caller> {
+async function loadCaller(by: "username" | "id", value: string): Promise<Caller> {
+  const column = by === "id" ? "u.id" : "u.username"; // one of two fixed strings
   const { rows } = await pool.query<UserRow>(
     `SELECT u.id, u.username, u."fullName", u.role::text AS role, u."tenantId", u."branchId",
             u."isEnabled", u."isDeleted", t."businessName", t."isEnabled" AS "tenantEnabled"
        FROM "User" u
        JOIN "Tenant" t ON t.id = u."tenantId"
-      WHERE u.username = $1`,
-    [username],
+      WHERE ${column} = $1`,
+    [value],
   );
   const u = rows[0];
   if (!u || u.isDeleted) throw new AuthError("Unknown Saada Hisaab user.");
