@@ -66,6 +66,9 @@ const schema = z
     LOGIN_MODE: z.enum(["dev", "api"]).default("dev"),
     DEV_LOGIN_PASSWORD: optional(z.string()),
     SAADA_LOGIN_API_URL: optional(z.url()),
+    // How an API-verified user is found in our database. id (production): the API's user id, with the same
+    // tenant. username: only when the login API and this database are different copies (the demo).
+    LOGIN_MATCH_BY: z.enum(["id", "username"]).default("id"),
 
     // ---------- Dev shortcut without OAuth (optional) ----------
     // When both are set, /mcp/<DEV_ACCESS_KEY> acts as DEV_USERNAME. Leave empty to disable.

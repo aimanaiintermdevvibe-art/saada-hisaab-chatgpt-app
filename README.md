@@ -30,7 +30,7 @@ Requires PostgreSQL 17 and Node 22+.
 copy .env.example .env          # then fill in the passwords, OAUTH_SECRET and DEV_LOGIN_PASSWORD
 npm install
 npm run db:setup -- -BackupPath C:\path\to\sh_db.backup   # creates the DB, restores it, creates the read-only login
-npm test                         # 60 tests against the restored database (incl. the full OAuth flow)
+npm test                         # 69 tests against the restored database (incl. the full OAuth flow)
 npm run dev                      # http://localhost:3000, MCP endpoint /mcp (sign-in required)
 ```
 
@@ -48,7 +48,7 @@ authorization server ([src/auth/oauth-provider.ts](src/auth/oauth-provider.ts)):
 1. ChatGPT reads `/.well-known/oauth-protected-resource` and `/.well-known/oauth-authorization-server`,
    then registers itself (`/register`, dynamic client registration).
 2. The user clicks Connect and lands on our `/authorize` page: **Sign in to Saada Hisaab**.
-3. `/login` checks the username and password (dev: `DEV_LOGIN_PASSWORD`; api: Saada Hisaab login API),
+3. `/login` checks the username and password with the Saada Hisaab login API (server to server),
    then sends the browser back to ChatGPT with a one-time code.
 4. ChatGPT exchanges the code (PKCE S256) at `/token` for a 1-hour access token and a 30-day refresh token.
 5. Every `/mcp` request needs the access token; the server resolves the user and their tenant from it.
@@ -57,9 +57,13 @@ Everything is a signed token (`OAUTH_SECRET`), so registrations and sign-ins sur
 Redirect targets are limited to `OAUTH_REDIRECT_HOSTS` (default: chatgpt.com, claude.ai, localhost).
 
 **Sign-in modes** (`LOGIN_MODE`):
-- `dev` (now): any Saada Hisaab username (e.g. `admin`, `abc123`) with the shared `DEV_LOGIN_PASSWORD`. Dummy data only.
-- `api`: set `SAADA_LOGIN_API_URL`. The request/response mapping in [src/auth/login.ts](src/auth/login.ts) is
-  assumed (POST `{username, password}`, 2xx = valid) until DevVibe shares the API spec.
+- `api` (default for the demo): `SAADA_LOGIN_API_URL` = `POST {username, password}`. 200 with
+  `data.user {id, tenantId}` = signed in; 400 / 404 = wrong password / username (one generic message shown).
+  `LOGIN_MATCH_BY` decides how that user is found in our database:
+  - `id` (production): the API's user id, and its tenant must match ours, or sign-in is refused.
+  - `username` (demo only): the demo login API runs on a different database than the `sh_db` copy, so the
+    same username has different ids there.
+- `dev`: any username with the shared `DEV_LOGIN_PASSWORD`, no API call. Dummy data only.
 
 ## Try it
 
@@ -72,7 +76,7 @@ Redirect targets are limited to `OAUTH_REDIRECT_HOSTS` (default: chatgpt.com, cl
   `{"mcpServers":{"saada-hisaab":{"type":"http","url":"http://localhost:3000/mcp/<DEV_ACCESS_KEY>"}}}`
 - **Inside ChatGPT (developer mode):** use the deployed server (below). In ChatGPT settings, turn on
   **Developer mode**, create an app with URL `https://<service>.onrender.com/mcp` and authentication **OAuth**.
-  ChatGPT registers itself; click Connect and sign in with a Saada Hisaab username and the demo password.
+  ChatGPT registers itself; click Connect and sign in with a Saada Hisaab account.
 
 ## Deploy (demo): Supabase + Render
 
@@ -85,7 +89,7 @@ environment variables on Render).
    The script restores into the empty `postgres` database, creates the read-only login and removes the
    Supabase Data API's access (`anon`, `authenticated`) to the restored tables.
 2. **Server (Render):** New > Blueprint > this repository. `render.yaml` defines the service; enter `PG_HOST`,
-   `DB_READONLY_USER`, `DB_READONLY_PASSWORD` and `DEV_LOGIN_PASSWORD` from `.env.supabase` when asked.
+   `DB_READONLY_USER` and `DB_READONLY_PASSWORD` from `.env.supabase` when asked.
    Render generates `OAUTH_SECRET` and `DEV_ACCESS_KEY`; the public URL (OAuth issuer) comes from Render.
 3. MCP endpoint: `https://<service>.onrender.com/mcp` (OAuth sign-in). The free plan sleeps after 15 idle
    minutes; the first request then takes up to a minute.

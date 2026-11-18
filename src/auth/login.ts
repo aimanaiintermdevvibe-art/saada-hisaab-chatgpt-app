@@ -1,6 +1,6 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import { config } from "../config.js";
-import { AuthError, resolveCallerByUsername } from "./caller.js";
+import { AuthError, resolveCallerById, resolveCallerByUsername, type Caller } from "./caller.js";
 
 export type LoginResult = { ok: true; userId: string } | { ok: false; message: string };
 
@@ -11,46 +11,53 @@ export interface LoginVerifier {
 }
 
 const WRONG = "Incorrect username or password.";
+const UNKNOWN_USER = "Unknown Saada Hisaab user.";
 
-/** After the password is accepted: the user must exist in the database and be allowed to sign in. */
-async function userIdFor(username: string): Promise<LoginResult> {
+/** Runs a caller lookup, turning "unknown / disabled user" into a sign-in message. */
+async function lookup(find: () => Promise<Caller>, unknownMessage = WRONG): Promise<LoginResult | Caller> {
   try {
-    const caller = await resolveCallerByUsername(username);
-    return { ok: true, userId: caller.userId };
+    return await find();
   } catch (err) {
-    if (err instanceof AuthError) {
-      return { ok: false, message: err.message === "Unknown Saada Hisaab user." ? WRONG : err.message };
-    }
+    if (err instanceof AuthError) return { ok: false, message: err.message === UNKNOWN_USER ? unknownMessage : err.message };
     throw err;
   }
 }
+const isCaller = (r: LoginResult | Caller): r is Caller => "tenantId" in r;
 
 const digest = (s: string) => createHash("sha256").update(s).digest();
 
 /**
- * DEMO ONLY (dummy database): any existing username with the shared DEV_LOGIN_PASSWORD.
- * Lets us test sign-in and per-business data in ChatGPT before the login API is connected.
+ * DEMO ONLY (dummy database): any existing username with one shared password.
+ * Used by tests, and before the login API was available.
  */
-class DevPasswordLogin implements LoginVerifier {
+export class DevPasswordLogin implements LoginVerifier {
   readonly mode = "dev" as const;
   constructor(private readonly password: string) {}
 
   async verify(username: string, password: string): Promise<LoginResult> {
     if (!timingSafeEqual(digest(password), digest(this.password))) return { ok: false, message: WRONG };
-    return userIdFor(username);
+    const found = await lookup(() => resolveCallerByUsername(username));
+    return isCaller(found) ? { ok: true, userId: found.userId } : found;
   }
 }
 
+interface ApiLoginResponse {
+  success?: unknown;
+  data?: { user?: { id?: unknown; username?: unknown; tenantId?: unknown } };
+}
+
 /**
- * Saada Hisaab's login API, called by this server only (never exposed to ChatGPT).
- *
- * TODO(DevVibe API details): request and response format are assumed until DevVibe shares the
- * spec: POST JSON { username, password }; any 2xx = valid credentials; 400/401/403 = rejected.
- * The tenant is then taken from our database by username, never from the API response.
+ * Saada Hisaab's login API (POST { username, password }), called by this server only.
+ *   200 { success: true, data: { user: { id, username, tenantId, ... } } } = signed in
+ *   400 "Invalid Password." / 404 "Invalid username." = rejected (shown to the user as one generic message)
+ * The API also sets an authToken cookie; it is not needed and not kept.
  */
-class SaadaApiLogin implements LoginVerifier {
+export class SaadaApiLogin implements LoginVerifier {
   readonly mode = "api" as const;
-  constructor(private readonly url: string) {}
+  constructor(
+    private readonly url: string,
+    private readonly matchBy: "id" | "username" = "id",
+  ) {}
 
   async verify(username: string, password: string): Promise<LoginResult> {
     let response: Response;
@@ -65,14 +72,35 @@ class SaadaApiLogin implements LoginVerifier {
     } catch {
       return { ok: false, message: "Saada Hisaab sign-in is not reachable right now. Please try again." };
     }
-    if ([400, 401, 403].includes(response.status)) return { ok: false, message: WRONG };
-    if (!response.ok) return { ok: false, message: "Saada Hisaab sign-in failed. Please try again." };
-    return userIdFor(username);
+    if ([400, 401, 403, 404].includes(response.status)) return { ok: false, message: WRONG };
+    if (response.status === 429) return { ok: false, message: "Too many sign-in attempts. Please wait a minute and try again." };
+
+    const body = (await response.json().catch(() => null)) as ApiLoginResponse | null;
+    const user = body?.data?.user;
+    if (!response.ok || body?.success !== true || typeof user?.id !== "string") {
+      return { ok: false, message: "Saada Hisaab sign-in failed. Please try again." };
+    }
+    return this.matchUser(user.id, typeof user.tenantId === "string" ? user.tenantId : "", user.username);
+  }
+
+  /** Finds the API's user in our database: by id with the same tenant, or (demo) by username. */
+  private async matchUser(apiUserId: string, apiTenantId: string, apiUsername: unknown): Promise<LoginResult> {
+    const notHere = "This Saada Hisaab account is not available in the ChatGPT app yet.";
+    if (this.matchBy === "username") {
+      if (typeof apiUsername !== "string") return { ok: false, message: notHere };
+      const found = await lookup(() => resolveCallerByUsername(apiUsername), notHere);
+      return isCaller(found) ? { ok: true, userId: found.userId } : found;
+    }
+    const found = await lookup(() => resolveCallerById(apiUserId), notHere);
+    if (!isCaller(found)) return found;
+    // The same person must belong to the same business in both systems, or nothing is shown.
+    if (found.tenantId !== apiTenantId) return { ok: false, message: notHere };
+    return { ok: true, userId: found.userId };
   }
 }
 
 export function createLoginVerifier(): LoginVerifier {
   return config.LOGIN_MODE === "api"
-    ? new SaadaApiLogin(config.SAADA_LOGIN_API_URL!)
+    ? new SaadaApiLogin(config.SAADA_LOGIN_API_URL!, config.LOGIN_MATCH_BY)
     : new DevPasswordLogin(config.DEV_LOGIN_PASSWORD!);
 }

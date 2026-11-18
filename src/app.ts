@@ -6,7 +6,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import express, { type NextFunction, type Request, type Response } from "express";
 import { rateLimit } from "express-rate-limit";
 import { AuthError, resolveCallerById, resolveCallerByUsername, type Caller } from "./auth/caller.js";
-import { createLoginVerifier } from "./auth/login.js";
+import { createLoginVerifier, type LoginVerifier } from "./auth/login.js";
 import { SaadaOAuthProvider } from "./auth/oauth-provider.js";
 import { SCOPE_READ, SUPPORTED_SCOPES } from "./auth/scopes.js";
 import { config } from "./config.js";
@@ -15,6 +15,8 @@ import { buildServer } from "./server.js";
 export interface AppOptions {
   /** Public address of this server (the OAuth issuer). Defaults to config; tests pass their own. */
   publicBaseUrl?: string;
+  /** How sign-in passwords are checked. Defaults to LOGIN_MODE; tests pass their own. */
+  loginVerifier?: LoginVerifier;
 }
 
 const log = (entry: Record<string, unknown>) => console.error(JSON.stringify(entry));
@@ -63,7 +65,7 @@ export function createApp(options: AppOptions = {}) {
   const mcpUrl = `${base}/mcp`;
   const provider = new SaadaOAuthProvider(
     { issuer: base, resource: mcpUrl, redirectHosts: config.OAUTH_REDIRECT_HOSTS },
-    createLoginVerifier(),
+    options.loginVerifier ?? createLoginVerifier(),
   );
 
   const app = express();

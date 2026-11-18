@@ -4,7 +4,7 @@ import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createApp } from "../src/app.js";
 import { signToken } from "../src/auth/jwt.js";
-import { config } from "../src/config.js";
+import { DevPasswordLogin } from "../src/auth/login.js";
 import { pool } from "../src/db/pool.js";
 import { USER_A, USER_B } from "./helpers.js";
 
@@ -12,18 +12,18 @@ import { USER_A, USER_B } from "./helpers.js";
 // discover -> register -> /authorize (login page) -> /login -> code -> /token (PKCE) -> /mcp with a bearer token.
 
 const REDIRECT = "http://localhost:9999/callback";
-const PASSWORD = config.DEV_LOGIN_PASSWORD!;
+// The flow is tested with the shared-password check; tests/login-api.test.ts covers the login API.
+const PASSWORD = "test-password-123";
 
 let base = "";
 let server: http.Server;
 let handler: http.RequestListener = () => {};
 /** A fresh app instance on the same address: like a restart (all in-memory state gone). */
 const restart = () => {
-  handler = createApp({ publicBaseUrl: base });
+  handler = createApp({ publicBaseUrl: base, loginVerifier: new DevPasswordLogin(PASSWORD) });
 };
 
 beforeAll(async () => {
-  expect(config.LOGIN_MODE).toBe("dev");
   server = http.createServer((req, res) => handler(req, res));
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
   base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;

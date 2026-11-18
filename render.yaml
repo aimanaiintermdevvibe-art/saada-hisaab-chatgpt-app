@@ -32,9 +32,13 @@ services:
       - key: OAUTH_SECRET
         generateValue: true
       - key: LOGIN_MODE
-        value: dev
-      - key: DEV_LOGIN_PASSWORD
-        sync: false
+        value: api
+      - key: SAADA_LOGIN_API_URL
+        value: https://demoapi.sadahisab.com/api/auth/login
+      # The demo login API uses a different database than the sh_db copy: match users by username.
+      # Production (same database as the login API): use id.
+      - key: LOGIN_MATCH_BY
+        value: username
       # Optional dev shortcut without sign-in (/mcp/<DEV_ACCESS_KEY>). Delete both to turn it off.
       - key: DEV_USERNAME
         value: admin
